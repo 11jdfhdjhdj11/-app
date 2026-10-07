@@ -23,39 +23,58 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      # 网页上传会丢失可执行权限，这里补上
-      - name: 准备 gradlew
-        run: chmod +x gradlew
+      # 自动找到项目所在文件夹（项目放在仓库最外层或某个子文件夹里都可以）
+      - name: 定位项目
+        run: |
+          f=$(find . -name settings.gradle.kts -not -path "./.git/*" | head -1)
+          if [ -z "$f" ]; then
+            echo "::error::仓库里没找到 settings.gradle.kts，请确认项目文件已全部上传。仓库最外层现在有："
+            ls -la
+            exit 1
+          fi
+          dir=$(dirname "$f")
+          echo "项目目录：$dir"
+          if [ ! -f "$dir/gradlew" ] || [ ! -f "$dir/gradle/wrapper/gradle-wrapper.jar" ]; then
+            echo "::error::$dir 里缺少 gradlew 或 gradle/wrapper/gradle-wrapper.jar，请把这两个也上传"
+            ls -la "$dir"
+            exit 1
+          fi
+          chmod +x "$dir/gradlew"
+          echo "PROJECT_DIR=$dir" >> "$GITHUB_ENV"
 
       - name: 单元测试
+        working-directory: ${{ env.PROJECT_DIR }}
         run: ./gradlew --no-daemon testLiteDebugUnitTest
 
       # ---------- 标准版（系统语音） ----------
       - name: 打包标准版
+        working-directory: ${{ env.PROJECT_DIR }}
         run: ./gradlew --no-daemon assembleLiteDebug
 
       - uses: actions/upload-artifact@v4
         with:
           name: 标准版-debug-apk
-          path: app/build/outputs/apk/lite/debug/*.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/lite/debug/*.apk
 
       # ---------- 音色版（内置 Kokoro 离线音色） ----------
       - name: 缓存 Kokoro 模型
         uses: actions/cache@v4
         with:
-          path: app/src/full/assets/kokoro
+          path: ${{ env.PROJECT_DIR }}/app/src/full/assets/kokoro
           key: kokoro-int8-multi-lang-v1_1
 
       - name: 下载 Kokoro 模型
+        working-directory: ${{ env.PROJECT_DIR }}
         run: bash scripts/fetch-kokoro.sh
 
       - name: 打包音色版
+        working-directory: ${{ env.PROJECT_DIR }}
         run: ./gradlew --no-daemon assembleFullDebug
 
       - uses: actions/upload-artifact@v4
         with:
           name: 音色版-debug-apk
-          path: app/build/outputs/apk/full/debug/*.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/full/debug/*.apk
 
       # ---------- 正式版：仓库配置了签名密钥（Settings → Secrets）才执行 ----------
       - name: 写入签名密钥
@@ -67,6 +86,7 @@ jobs:
 
       - name: 打包正式版
         if: steps.keystore.outputs.path != ''
+        working-directory: ${{ env.PROJECT_DIR }}
         env:
           SIGNING_STORE_FILE: ${{ steps.keystore.outputs.path }}
           SIGNING_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -78,7 +98,7 @@ jobs:
         if: steps.keystore.outputs.path != ''
         with:
           name: release-apk
-          path: app/build/outputs/apk/*/release/*.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/*/release/*.apk
 
       # 推送 v 开头的标签（如 v1.0.0）时，自动发布到 Releases 页面
       - name: 发布 Release
@@ -86,6 +106,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            app/build/outputs/apk/*/debug/*.apk
-            app/build/outputs/apk/*/release/*.apk
+            ${{ env.PROJECT_DIR }}/app/build/outputs/apk/*/debug/*.apk
+            ${{ env.PROJECT_DIR }}/app/build/outputs/apk/*/release/*.apk
           fail_on_unmatched_files: false
